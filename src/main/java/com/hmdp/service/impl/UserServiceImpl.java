@@ -1,6 +1,8 @@
 package com.hmdp.service.impl;
 
 import cn.hutool.core.bean.BeanUtil;
+import cn.hutool.core.bean.copier.CopyOptions;
+import cn.hutool.core.lang.UUID;
 import cn.hutool.core.util.RandomUtil;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.dto.LoginFormDTO;
@@ -10,10 +12,19 @@ import com.hmdp.entity.User;
 import com.hmdp.mapper.UserMapper;
 import com.hmdp.service.IUserService;
 import lombok.extern.log4j.Log4j2;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import javax.servlet.http.HttpSession;
 
+import java.util.HashMap;
+import java.util.Map;
+import java.util.TreeMap;
+import java.util.concurrent.TimeUnit;
+
+import static com.hmdp.utils.RedisConstants.LOGIN_USER_KEY;
+import static com.hmdp.utils.RedisConstants.LOGIN_USER_TTL;
 import static com.hmdp.utils.RegexUtils.isPhoneInvalid;
 import static com.hmdp.utils.SystemConstants.USER_NICK_NAME_PREFIX;
 
@@ -28,6 +39,9 @@ import static com.hmdp.utils.SystemConstants.USER_NICK_NAME_PREFIX;
 @Service
 @Log4j2
 public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IUserService {
+
+    @Autowired
+    private StringRedisTemplate stringRedisTemplate;
 
     @Override
     public Result sendCode(String phone, HttpSession session) {
@@ -44,7 +58,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
     public Result login(LoginFormDTO loginForm, HttpSession session) {
         String phone=loginForm.getPhone();
         if (isPhoneInvalid(phone)){
-            return Result.fail("手机号无效");
+            return Result.fail("手机号格式错误");
         }
         Object cacheCode= session.getAttribute("code");
         String code=loginForm.getCode();
@@ -55,8 +69,19 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         if (user==null){
             createUserWithPhone(phone);
         }
-        session.setAttribute("user", BeanUtil.copyProperties(user, UserDTO.class));
-        return Result.ok();
+        String token= UUID.randomUUID().toString(true);
+        UserDTO userDTO = BeanUtil.copyProperties(user, UserDTO.class);
+        //将User对象转为HashMap存储
+        Map<String,Object> userMap=BeanUtil.beanToMap(userDTO,new HashMap<>(),
+                CopyOptions.create()
+                        .setIgnoreNullValue(true)
+                        .setFieldValueEditor((fieldName,fieldValue)->fieldValue.toString()));
+        String tokenKey=LOGIN_USER_KEY+token;
+        stringRedisTemplate.opsForHash().putAll(tokenKey,userMap);
+        stringRedisTemplate.expire(tokenKey, LOGIN_USER_TTL, TimeUnit.MINUTES);
+
+        // 返回token
+        return Result.ok(token);
     }
 
     private void createUserWithPhone(String phone) {
