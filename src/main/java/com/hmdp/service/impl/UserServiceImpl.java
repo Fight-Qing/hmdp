@@ -23,8 +23,7 @@ import java.util.Map;
 import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
 
-import static com.hmdp.utils.RedisConstants.LOGIN_USER_KEY;
-import static com.hmdp.utils.RedisConstants.LOGIN_USER_TTL;
+import static com.hmdp.utils.RedisConstants.*;
 import static com.hmdp.utils.RegexUtils.isPhoneInvalid;
 import static com.hmdp.utils.SystemConstants.USER_NICK_NAME_PREFIX;
 
@@ -49,7 +48,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
             return Result.fail("手机号无效");
         }
         String code= RandomUtil.randomNumbers(6);
-        session.setAttribute("code",code);
+        stringRedisTemplate.opsForValue().set(LOGIN_CODE_KEY+phone,code,LOGIN_CODE_TTL,TimeUnit.MINUTES);
         log.debug("发送短信验证码成功，验证码：{}",code);
         return Result.ok();
     }
@@ -60,14 +59,15 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         if (isPhoneInvalid(phone)){
             return Result.fail("手机号格式错误");
         }
-        Object cacheCode= session.getAttribute("code");
+        // 3.从redis获取验证码并校验
+        String cacheCode = stringRedisTemplate.opsForValue().get(LOGIN_CODE_KEY + phone);
         String code=loginForm.getCode();
         if (cacheCode==null||!cacheCode.equals(code)){
             return Result.fail("验证码错误");
         }
         User user = query().eq("phone", phone).one();
         if (user==null){
-            createUserWithPhone(phone);
+            user=createUserWithPhone(phone);
         }
         String token= UUID.randomUUID().toString(true);
         UserDTO userDTO = BeanUtil.copyProperties(user, UserDTO.class);
@@ -79,15 +79,15 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         String tokenKey=LOGIN_USER_KEY+token;
         stringRedisTemplate.opsForHash().putAll(tokenKey,userMap);
         stringRedisTemplate.expire(tokenKey, LOGIN_USER_TTL, TimeUnit.MINUTES);
-
         // 返回token
         return Result.ok(token);
     }
 
-    private void createUserWithPhone(String phone) {
+    private User createUserWithPhone(String phone) {
         User user=new User();
         user.setPhone(phone);
         user.setNickName(USER_NICK_NAME_PREFIX+RandomUtil.randomString(10));
         save(user);
+        return user;
     }
 }
