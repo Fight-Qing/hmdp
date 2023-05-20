@@ -10,6 +10,7 @@ import com.hmdp.entity.Shop;
 import com.hmdp.mapper.ShopMapper;
 import com.hmdp.service.IShopService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.hmdp.utils.CacheClient;
 import com.hmdp.utils.RedisData;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -32,11 +33,27 @@ import static com.hmdp.utils.RedisConstants.*;
 public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IShopService {
     @Autowired
     private StringRedisTemplate stringRedisTemplate;
+    @Autowired
+    private CacheClient cacheClient;
+
+    private static ExecutorService threadPool = new ThreadPoolExecutor(
+            2,
+            5,
+            3,
+            TimeUnit.SECONDS,
+            new LinkedBlockingDeque<>(3),
+            Executors.defaultThreadFactory(),
+            new ThreadPoolExecutor.DiscardOldestPolicy());
 
 
     @Override
     public Result queryById(Long id) {
-        Shop shop=queryWithLogicalExpire(id);
+        //解决缓存穿透
+//        Shop shop = cacheClient.queryWithPassThrough(CACHE_SHOP_KEY,id,Shop.class,this::getById,CACHE_SHOP_TTL,TimeUnit.MINUTES);
+        //逻辑过期解决缓存击穿
+//        Shop shop = cacheClient.queryWithLocalExpire(CACHE_SHOP_KEY,id,Shop.class,this::getById,CACHE_SHOP_TTL,TimeUnit.MINUTES);
+        //互斥搜解决缓存击穿
+        Shop shop = cacheClient.queryWithMutex(CACHE_SHOP_KEY,id,Shop.class,this::getById,CACHE_SHOP_TTL,TimeUnit.MINUTES);
         if (shop==null){
             return Result.fail("店铺不存在");
         }
@@ -129,15 +146,6 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
      *              一般这种活动都会预热，提前加入缓存
      */
     public Shop queryWithLogicalExpire( Long id ){
-
-        ExecutorService threadPool = new ThreadPoolExecutor(
-                2,
-                5,
-                3,
-                TimeUnit.SECONDS,
-                new LinkedBlockingDeque<>(3),
-                Executors.defaultThreadFactory(),
-                new ThreadPoolExecutor.DiscardOldestPolicy());
 
         String key=CACHE_SHOP_KEY+id;
         String shopJson = stringRedisTemplate.opsForValue().get(key);
